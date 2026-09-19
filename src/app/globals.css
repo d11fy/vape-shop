@@ -1,0 +1,524 @@
+@import 'tailwindcss';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ڤيب شوب — Design tokens
+
+   One source of truth for colour, elevation, radius and motion. Components
+   never hard-code a hex value; they reference a token, which is what keeps
+   light and dark mode honest and makes a future white-label trivial.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Theme resolution, without an inline bootstrap script:
+ *   • no `data-theme`   → follow the operating system
+ *   • data-theme="dark" → force dark
+ *   • data-theme="light"→ force light, even on a dark OS
+ *
+ * The attribute is rendered by the server from a cookie, so the first paint is
+ * already correct and there is no flash of the wrong theme.
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+:root {
+  /* Surfaces — a four-step ladder from page to popover */
+  --surface-canvas: #f7f8fa;
+  --surface-card: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f1f3f6;
+  --surface-inverse: #161b22;
+
+  /* Brand */
+  --brand-ink: #161b22;
+  --brand-ink-strong: #0f1419;
+  --brand-accent: #34d399;
+  --brand-accent-strong: #059669;
+  --brand-accent-soft: #ecfdf5;
+  --brand-accent-border: #a7f3d0;
+
+  /* Text */
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+  --text-inverse: #f9fafb;
+  --text-on-accent: #04291d;
+
+  /* Lines */
+  --border-subtle: #eef0f3;
+  --border-default: #e5e7eb;
+  --border-strong: #d1d5db;
+
+  /* Status */
+  --status-danger: #ef4444;
+  --status-danger-soft: #fef2f2;
+  --status-danger-border: #fecaca;
+  --status-warning: #f59e0b;
+  --status-warning-soft: #fffbeb;
+  --status-warning-border: #fde68a;
+  --status-success: #10b981;
+  --status-success-soft: #ecfdf5;
+  --status-success-border: #a7f3d0;
+  --status-info: #3b82f6;
+  --status-info-soft: #eff6ff;
+  --status-info-border: #bfdbfe;
+
+  /* Data visualisation — distinguishable in both themes and for most CVD */
+  --chart-1: #10b981;
+  --chart-2: #3b82f6;
+  --chart-3: #f59e0b;
+  --chart-4: #8b5cf6;
+  --chart-5: #ec4899;
+  --chart-6: #06b6d4;
+  --chart-grid: #eef0f3;
+
+  /* Elevation — light, never heavy */
+  --shadow-xs: 0 1px 2px 0 rgb(16 24 40 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(16 24 40 / 0.06), 0 1px 2px -1px rgb(16 24 40 / 0.04);
+  --shadow-md: 0 4px 12px -2px rgb(16 24 40 / 0.08), 0 2px 4px -2px rgb(16 24 40 / 0.04);
+  --shadow-lg: 0 12px 28px -8px rgb(16 24 40 / 0.12), 0 4px 10px -4px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 18px 44px -12px rgb(16 24 40 / 0.18);
+
+  --ring-accent: 0 0 0 3px rgb(52 211 153 / 0.28);
+  --ring-danger: 0 0 0 3px rgb(239 68 68 / 0.22);
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --header-height: 60px;
+  --sidebar-width: 254px;
+  --sidebar-width-collapsed: 72px;
+  --bottom-nav-height: 62px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --surface-canvas: #0b0e13;
+    --surface-card: #12161d;
+    --surface-raised: #171c25;
+    --surface-sunken: #0f131a;
+    --surface-inverse: #f3f4f6;
+
+    --brand-ink: #e5e7eb;
+    --brand-ink-strong: #f9fafb;
+    --brand-accent: #34d399;
+    --brand-accent-strong: #10b981;
+    --brand-accent-soft: #06251b;
+    --brand-accent-border: #10523c;
+
+    --text-primary: #eceef2;
+    --text-secondary: #99a1af;
+    --text-tertiary: #6b7484;
+    --text-inverse: #12161d;
+    --text-on-accent: #04291d;
+
+    --border-subtle: #1b212b;
+    --border-default: #242b37;
+    --border-strong: #333c4c;
+
+    --status-danger: #f87171;
+    --status-danger-soft: #2a1416;
+    --status-danger-border: #5c2427;
+    --status-warning: #fbbf24;
+    --status-warning-soft: #2a1f08;
+    --status-warning-border: #5c4310;
+    --status-success: #34d399;
+    --status-success-soft: #06251b;
+    --status-success-border: #10523c;
+    --status-info: #60a5fa;
+    --status-info-soft: #0d1b2f;
+    --status-info-border: #1d3a63;
+
+    --chart-1: #34d399;
+    --chart-2: #60a5fa;
+    --chart-3: #fbbf24;
+    --chart-4: #a78bfa;
+    --chart-5: #f472b6;
+    --chart-6: #22d3ee;
+    --chart-grid: #1f2732;
+
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.5);
+    --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.55);
+    --shadow-lg: 0 14px 30px -10px rgb(0 0 0 / 0.65);
+    --shadow-pop: 0 20px 48px -14px rgb(0 0 0 / 0.75);
+
+    --ring-accent: 0 0 0 3px rgb(52 211 153 / 0.24);
+    --ring-danger: 0 0 0 3px rgb(248 113 113 / 0.22);
+  }
+}
+
+:root[data-theme='dark'] {
+  --surface-canvas: #0b0e13;
+  --surface-card: #12161d;
+  --surface-raised: #171c25;
+  --surface-sunken: #0f131a;
+  --surface-inverse: #f3f4f6;
+
+  --brand-ink: #e5e7eb;
+  --brand-ink-strong: #f9fafb;
+  --brand-accent: #34d399;
+  --brand-accent-strong: #10b981;
+  --brand-accent-soft: #06251b;
+  --brand-accent-border: #10523c;
+
+  --text-primary: #eceef2;
+  --text-secondary: #99a1af;
+  --text-tertiary: #6b7484;
+  --text-inverse: #12161d;
+  --text-on-accent: #04291d;
+
+  --border-subtle: #1b212b;
+  --border-default: #242b37;
+  --border-strong: #333c4c;
+
+  --status-danger: #f87171;
+  --status-danger-soft: #2a1416;
+  --status-danger-border: #5c2427;
+  --status-warning: #fbbf24;
+  --status-warning-soft: #2a1f08;
+  --status-warning-border: #5c4310;
+  --status-success: #34d399;
+  --status-success-soft: #06251b;
+  --status-success-border: #10523c;
+  --status-info: #60a5fa;
+  --status-info-soft: #0d1b2f;
+  --status-info-border: #1d3a63;
+
+  --chart-1: #34d399;
+  --chart-2: #60a5fa;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #f472b6;
+  --chart-6: #22d3ee;
+  --chart-grid: #1f2732;
+
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.5);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.55);
+  --shadow-lg: 0 14px 30px -10px rgb(0 0 0 / 0.65);
+  --shadow-pop: 0 20px 48px -14px rgb(0 0 0 / 0.75);
+
+  --ring-accent: 0 0 0 3px rgb(52 211 153 / 0.24);
+  --ring-danger: 0 0 0 3px rgb(248 113 113 / 0.22);
+}
+
+/* Expose the tokens to Tailwind's utility generator. */
+@theme inline {
+  --color-canvas: var(--surface-canvas);
+  --color-card: var(--surface-card);
+  --color-raised: var(--surface-raised);
+  --color-sunken: var(--surface-sunken);
+  --color-inverse: var(--surface-inverse);
+
+  --color-ink: var(--brand-ink);
+  --color-ink-strong: var(--brand-ink-strong);
+  --color-accent: var(--brand-accent);
+  --color-accent-strong: var(--brand-accent-strong);
+  --color-accent-soft: var(--brand-accent-soft);
+  --color-accent-border: var(--brand-accent-border);
+
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-on-inverse: var(--text-inverse);
+  --color-on-accent: var(--text-on-accent);
+
+  --color-line-subtle: var(--border-subtle);
+  --color-line: var(--border-default);
+  --color-line-strong: var(--border-strong);
+
+  --color-danger: var(--status-danger);
+  --color-danger-soft: var(--status-danger-soft);
+  --color-danger-border: var(--status-danger-border);
+  --color-warning: var(--status-warning);
+  --color-warning-soft: var(--status-warning-soft);
+  --color-warning-border: var(--status-warning-border);
+  --color-success: var(--status-success);
+  --color-success-soft: var(--status-success-soft);
+  --color-success-border: var(--status-success-border);
+  --color-info: var(--status-info);
+  --color-info-soft: var(--status-info-soft);
+  --color-info-border: var(--status-info-border);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-pop: var(--shadow-pop);
+
+  --font-sans: var(--font-arabic), 'Segoe UI', system-ui, sans-serif;
+  --font-numeric: var(--font-arabic), 'SF Mono', ui-monospace, monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  * {
+    border-color: var(--border-default);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--surface-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    /* Arabic reads better with slightly looser leading than Latin. */
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.4;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  /*
+   * Numbers stay left-to-right and tabular so columns line up in RTL tables.
+   * `isolate` keeps a Latin-digit run from dragging surrounding Arabic around;
+   * note there is deliberately no `display` here — forcing `inline-block` would
+   * collapse block-level elements that carry the class onto one line.
+   */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+
+  /*
+   * For text that mixes figures with Arabic words — "13 قطعة", "الرصيد 50.00".
+   * `.num` would force the whole run left-to-right and put the words in the
+   * wrong order; `plaintext` lets the text pick its own direction from its
+   * first letter, so Arabic reads right-to-left and a bare code or number
+   * still reads left-to-right. Only for mixed content — keep `.num` for pure
+   * numbers and amounts.
+   */
+  .num-mixed {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    unicode-bidi: plaintext;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-accent-strong);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  ::placeholder {
+    color: var(--text-tertiary);
+    opacity: 1;
+  }
+
+  /* Hide the native number spinners — quantities use explicit ± buttons. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+
+  input[type='search']::-webkit-search-cancel-button {
+    appearance: none;
+  }
+
+  ::selection {
+    background-color: var(--brand-accent);
+    color: var(--text-on-accent);
+  }
+
+  /* Slim, unobtrusive scrollbars that match the theme. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--text-tertiary);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Utilities
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  .surface-card {
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Comfortable minimum hit area on touch screens. */
+  .tap-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .grid-stack > * {
+    grid-area: 1 / 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Motion — subtle, fast, and fully disabled for users who ask for less
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes vs-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vs-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vs-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes vs-pop-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes vs-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes vs-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes vs-toast-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes vs-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgb(52 211 153 / 0.45); }
+  70% { box-shadow: 0 0 0 10px rgb(52 211 153 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(52 211 153 / 0); }
+}
+
+.animate-fade-in { animation: vs-fade-in 0.18s var(--ease-out) both; }
+.animate-slide-up { animation: vs-slide-up 0.24s var(--ease-out) both; }
+.animate-sheet-up { animation: vs-sheet-up 0.28s var(--ease-out) both; }
+.animate-pop-in { animation: vs-pop-in 0.16s var(--ease-out) both; }
+.animate-toast-in { animation: vs-toast-in 0.22s var(--ease-spring) both; }
+.animate-spin-slow { animation: vs-spin 0.7s linear infinite; }
+.animate-pulse-ring { animation: vs-pulse-ring 1.8s ease-out infinite; }
+
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--surface-sunken) 0%,
+    color-mix(in srgb, var(--surface-sunken) 60%, var(--surface-card)) 50%,
+    var(--surface-sunken) 100%
+  );
+  background-size: 200% 100%;
+  animation: vs-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Print — thermal receipts and A4 invoices
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media print {
+  .no-print,
+  nav,
+  aside,
+  header.app-header {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .print-area {
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .print-break {
+    break-after: page;
+  }
+}
+
+@page {
+  margin: 12mm;
+}

@@ -1,0 +1,1478 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  ڤيب شوب | Vape Shop — Database Schema
+//  Multi-tenant SaaS for shisha / smoking-goods retail management
+//
+//  CONVENTIONS
+//  ───────────
+//  • Money      → BigInt, stored in MINOR UNITS (e.g. halalas, cents, agorot).
+//                 Never floats. All arithmetic goes through src/core/money.
+//  • Quantity   → Decimal(18,3), stored in the product's BASE UNIT
+//                 (piece | gram | millilitre). Display units convert via
+//                 `displayFactor` (e.g. kg → 1000 g).
+//  • Unit cost  → Decimal(20,6), MINOR UNITS PER BASE UNIT. Extra precision
+//                 keeps weighted-average costing exact over many movements.
+//  • Tenancy    → every store-scoped row carries `storeId`; every index and
+//                 unique constraint is prefixed with it.
+//  • Deletion   → financial records are soft-deleted (`deletedAt`), never
+//                 physically removed.
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+  runtime      = "nodejs"
+}
+
+/// Prisma 7: the connection URL lives in `prisma.config.ts` for the CLI, and the
+/// runtime client is constructed with the `@prisma/adapter-pg` driver adapter.
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SUPPORT
+}
+
+enum StoreStatus {
+  PENDING /// created, onboarding not finished
+  ACTIVE
+  SUSPENDED /// disabled by platform (non-payment / abuse)
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  GRACE /// expired but inside the read-only grace window
+  EXPIRED /// grace window is over → access blocked
+  CANCELED
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum UnitKind {
+  COUNT /// base unit = piece
+  WEIGHT /// base unit = gram
+  VOLUME /// base unit = millilitre
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum InventoryTxnType {
+  OPENING
+  PURCHASE
+  SALE
+  SALE_RETURN /// customer returned goods → stock in
+  PURCHASE_RETURN /// returned goods to supplier → stock out
+  ADJUSTMENT
+  DAMAGE
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+enum SaleStatus {
+  COMPLETED
+  PARTIALLY_RETURNED
+  RETURNED
+  CANCELED
+}
+
+enum PurchaseStatus {
+  DRAFT
+  RECEIVED
+  PARTIALLY_RETURNED
+  RETURNED
+  CANCELED
+}
+
+enum PaymentMethodType {
+  CASH
+  BANK
+  CARD
+  WALLET
+  TRANSFER
+  OTHER
+}
+
+enum PaymentDirection {
+  IN /// money entering the business
+  OUT /// money leaving the business
+}
+
+enum PaymentSource {
+  SALE /// paid at point of sale
+  CUSTOMER_DEBT /// collecting an old receivable
+  PURCHASE /// paid to supplier on the purchase invoice
+  SUPPLIER_DEBT /// settling an old payable
+  SALE_REFUND /// refund handed back to customer
+  PURCHASE_REFUND /// refund received from supplier
+  OTHER
+}
+
+enum PartyLedgerType {
+  OPENING_BALANCE
+  INVOICE
+  PAYMENT
+  RETURN
+  ADJUSTMENT
+  WRITE_OFF
+}
+
+enum CashboxTxnType {
+  OPENING
+  SALE
+  SALE_REFUND
+  EXPENSE
+  DEBT_COLLECTION
+  SUPPLIER_PAYMENT
+  PURCHASE
+  PURCHASE_REFUND
+  CASH_IN
+  CASH_OUT
+  SHIFT_SETTLEMENT
+  ADJUSTMENT
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum TransferStatus {
+  DRAFT
+  IN_TRANSIT
+  COMPLETED
+  CANCELED
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  DANGER
+}
+
+enum NotificationKind {
+  LOW_STOCK
+  OUT_OF_STOCK
+  SUBSCRIPTION_EXPIRING
+  SUBSCRIPTION_EXPIRED
+  CASH_MISMATCH
+  OVERDUE_DEBT
+  SUPPLIER_DUE
+  PLATFORM_ANNOUNCEMENT
+  SYSTEM
+}
+
+enum AdjustmentStatus {
+  DRAFT
+  APPLIED
+  CANCELED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  IDENTITY & PLATFORM
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A human identity. One person may belong to several stores.
+model User {
+  id           String        @id @default(cuid())
+  email        String?       @unique
+  phone        String?       @unique
+  name         String
+  passwordHash String
+  avatarUrl    String?
+  platformRole PlatformRole?
+  status       UserStatus    @default(ACTIVE)
+  locale       String        @default("ar")
+  /// Set when someone else chose this password (a new employee, an admin reset);
+  /// the user must replace it before using the system.
+  mustChangePassword Boolean @default(false)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  memberships    StoreUser[]
+  sessions       Session[]
+  resetTokens    PasswordResetToken[]
+  auditLogs      AuditLog[]
+  supportSession SupportSession[]
+  ownedStores    Store[]              @relation("StoreOwner")
+  notificationReads NotificationRead[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model Session {
+  id              String    @id @default(cuid())
+  userId          String
+  tokenHash       String    @unique
+  activeStoreId   String?
+  supportStoreId  String? /// set while a platform admin impersonates a store
+  ipAddress       String?
+  userAgent       String?
+  expiresAt       DateTime
+  lastSeenAt      DateTime  @default(now())
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// Subscription plan definition. Limits live in the database, never in code.
+model Plan {
+  id                String   @id @default(cuid())
+  code              String   @unique /// starter | professional | business
+  nameAr            String
+  nameEn            String
+  descriptionAr     String?
+  monthlyPrice      BigInt /// minor units
+  yearlyPrice       BigInt
+  currency          String   @default("SAR")
+  trialDays         Int      @default(14)
+  graceDays         Int      @default(7)
+  maxEmployees      Int? /// null = unlimited
+  maxBranches       Int?
+  maxProducts       Int?
+  maxMonthlyInvoices Int?
+  features          String[] @default([]) /// feature keys, see src/core/plans
+  sortOrder         Int      @default(0)
+  isPublic          Boolean  @default(true)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+/// A tenant. Every store-scoped row in the system points back here.
+model Store {
+  id        String      @id @default(cuid())
+  slug      String      @unique
+  name      String
+  ownerId   String?
+  status    StoreStatus @default(PENDING)
+  phone     String?
+  email     String?
+  address   String?
+  city      String?
+  country   String      @default("SA")
+  logoUrl   String?
+  notes     String?
+  onboardedAt DateTime?
+  suspendedAt DateTime?
+  suspendReason String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  owner    User? @relation("StoreOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  settings StoreSettings?
+  subscription Subscription?
+
+  members        StoreUser[]
+  roles          Role[]
+  branches       Branch[]
+  categories     Category[]
+  brands         Brand[]
+  products       Product[]
+  variants       ProductVariant[]
+  inventoryItems InventoryItem[]
+  inventoryTxns  InventoryTransaction[]
+  adjustments    InventoryAdjustment[]
+  transfers      InventoryTransfer[]
+  customers      Customer[]
+  customerLedger CustomerLedgerEntry[]
+  suppliers      Supplier[]
+  supplierLedger SupplierLedgerEntry[]
+  sales          Sale[]
+  saleItems      SaleItem[]
+  returns        SaleReturn[]
+  purchases      Purchase[]
+  payments       Payment[]
+  paymentMethods PaymentMethod[]
+  expenses       Expense[]
+  expenseCategories ExpenseCategory[]
+  cashboxes      Cashbox[]
+  cashboxTxns    CashboxTransaction[]
+  shifts         Shift[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  counters       Counter[]
+  idempotencyKeys IdempotencyKey[]
+  attachments    Attachment[]
+  supportSessions SupportSession[]
+
+  @@index([status])
+  @@map("stores")
+}
+
+model StoreSettings {
+  id      String @id @default(cuid())
+  storeId String @unique
+
+  currency         String  @default("SAR")
+  currencyDecimals Int     @default(2)
+  timezone         String  @default("Asia/Riyadh")
+  locale           String  @default("ar")
+
+  taxEnabled   Boolean @default(false)
+  taxRateBps   Int     @default(1500) /// basis points: 1500 = 15%
+  taxInclusive Boolean @default(false)
+  taxNumber    String?
+
+  invoicePrefix   String @default("VS")
+  invoicePadding  Int    @default(6)
+  receiptWidthMm  Int    @default(80)
+  receiptFooterAr String @default("شكراً لتعاملكم معنا")
+  showLogoOnReceipt Boolean @default(true)
+
+  lowStockAlerts     Boolean @default(true)
+  defaultMinimumStock Decimal @default(0) @db.Decimal(18, 3)
+  negativeStockAllowed Boolean @default(false)
+
+  debtEnabled        Boolean @default(true)
+  defaultDebtLimit   BigInt  @default(0) /// 0 = no limit
+  debtOverdueDays    Int     @default(30)
+
+  /// Age / compliance controls — configurable per store & jurisdiction.
+  ageVerificationEnabled Boolean @default(true)
+  minimumCustomerAge     Int     @default(18)
+  ageNoticeAr            String  @default("يمنع البيع لمن هم دون السن القانونية")
+  requireAgeCheckAtSale  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@map("store_settings")
+}
+
+model Subscription {
+  id        String             @id @default(cuid())
+  storeId   String             @unique
+  planId    String
+  status    SubscriptionStatus @default(TRIALING)
+  startsAt  DateTime           @default(now())
+  endsAt    DateTime
+  graceEndsAt DateTime?
+  canceledAt DateTime?
+  billingCycle String          @default("monthly") /// monthly | yearly
+  amount    BigInt             @default(0)
+  notes     String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  plan  Plan  @relation(fields: [planId], references: [id])
+
+  events SubscriptionEvent[]
+
+  @@index([status, endsAt])
+  @@map("subscriptions")
+}
+
+model SubscriptionEvent {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  type           String /// created | extended | plan_changed | suspended | reactivated | canceled
+  fromPlanId     String?
+  toPlanId       String?
+  previousEndsAt DateTime?
+  newEndsAt      DateTime?
+  amount         BigInt   @default(0)
+  actorUserId    String?
+  note           String?
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+  @@map("subscription_events")
+}
+
+/// Records every time a platform admin enters a tenant for support.
+model SupportSession {
+  id        String    @id @default(cuid())
+  storeId   String
+  userId    String
+  reason    String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  ipAddress String?
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, startedAt])
+  @@map("support_sessions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ACCESS CONTROL
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Store-scoped role. System roles are seeded per store and cannot be deleted.
+model Role {
+  id          String   @id @default(cuid())
+  storeId     String
+  key         String /// owner | manager | cashier | accountant | inventory | custom-*
+  nameAr      String
+  nameEn      String?
+  description String?
+  isSystem    Boolean  @default(false)
+  permissions String[] @default([]) /// permission keys, see src/core/rbac
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store   Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  members StoreUser[]
+
+  @@unique([storeId, key])
+  @@index([storeId])
+  @@map("roles")
+}
+
+/// Membership of a user inside a store, with optional per-user permission deltas.
+model StoreUser {
+  id       String     @id @default(cuid())
+  storeId  String
+  userId   String
+  roleId   String
+  branchId String?
+  status   UserStatus @default(ACTIVE)
+
+  extraPermissions  String[] @default([]) /// granted on top of the role
+  deniedPermissions String[] @default([]) /// revoked even if the role grants them
+
+  invitedAt DateTime?
+  joinedAt  DateTime  @default(now())
+  lastActiveAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role    @relation(fields: [roleId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, userId])
+  @@index([storeId, status])
+  @@index([userId])
+  @@map("store_users")
+}
+
+model Branch {
+  id        String    @id @default(cuid())
+  storeId   String
+  name      String
+  code      String
+  phone     String?
+  address   String?
+  isDefault Boolean   @default(false)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store          Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  members        StoreUser[]
+  inventoryItems InventoryItem[]
+  inventoryTxns  InventoryTransaction[]
+  sales          Sale[]
+  returns        SaleReturn[]
+  purchases      Purchase[]
+  expenses       Expense[]
+  cashboxes      Cashbox[]
+  shifts         Shift[]
+  adjustments    InventoryAdjustment[]
+  transfersFrom  InventoryTransfer[]    @relation("TransferFrom")
+  transfersTo    InventoryTransfer[]    @relation("TransferTo")
+  payments       Payment[]
+
+  @@unique([storeId, code])
+  @@index([storeId, isActive])
+  @@map("branches")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CATALOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Category {
+  id        String    @id @default(cuid())
+  storeId   String
+  name      String
+  slug      String
+  color     String? /// hex accent used in POS chips
+  icon      String?
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([storeId, slug])
+  @@index([storeId, isActive])
+  @@map("categories")
+}
+
+model Brand {
+  id        String    @id @default(cuid())
+  storeId   String
+  name      String
+  slug      String
+  logoUrl   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([storeId, slug])
+  @@index([storeId, isActive])
+  @@map("brands")
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  storeId     String
+  categoryId  String?
+  brandId     String?
+  name        String
+  description String?
+  imageUrl    String?
+  status      ProductStatus @default(ACTIVE)
+
+  /// Physical measurement family. Drives the base unit used for stock:
+  /// COUNT → piece, WEIGHT → gram, VOLUME → millilitre.
+  /// The size of one SALE unit lives on the variant, because "50 جرام",
+  /// "250 جرام" and "بالوزن" are different variants of the same tobacco.
+  unitKind UnitKind @default(COUNT)
+
+  trackInventory Boolean @default(true)
+  hasVariants    Boolean @default(false)
+
+  isAgeRestricted Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  brand    Brand?           @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  variants ProductVariant[]
+
+  @@index([storeId, status, deletedAt])
+  @@index([storeId, categoryId])
+  @@index([storeId, brandId])
+  @@index([storeId, name])
+  @@map("products")
+}
+
+/// Every product has at least one variant — the default one. Stock, prices and
+/// barcodes always live on the variant so the rest of the system has one shape.
+model ProductVariant {
+  id        String @id @default(cuid())
+  storeId   String
+  productId String
+
+  name      String  @default("افتراضي") /// 50 جرام / 250 جرام / بالوزن …
+  sku       String
+  barcode   String?
+  isDefault Boolean @default(false)
+
+  /// Label for one sale unit shown at the till (علبة / كيلو / قطعة).
+  unitLabel String @default("قطعة")
+  /// How many BASE units one sale unit contains.
+  /// 250g pack → 250 · 1kg loose → 1000 · single piece → 1.
+  displayFactor Decimal @default(1) @db.Decimal(18, 3)
+  /// Allow fractional quantities at the till — loose tobacco sold by weight.
+  allowsFractional Boolean @default(false)
+
+  purchasePrice  BigInt @default(0) /// last purchase price, per sale unit
+  sellingPrice   BigInt @default(0) /// per sale unit
+  wholesalePrice BigInt @default(0)
+
+  /// Weighted-average cost, minor units per BASE unit. Source of truth for COGS.
+  avgCostPerBase Decimal @default(0) @db.Decimal(20, 6)
+
+  minimumStock Decimal @default(0) @db.Decimal(18, 3) /// in base units
+  sortOrder    Int     @default(0)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  inventoryItems  InventoryItem[]
+  inventoryTxns   InventoryTransaction[]
+  saleItems       SaleItem[]
+  purchaseItems   PurchaseItem[]
+  returnItems     SaleReturnItem[]
+  adjustmentItems InventoryAdjustmentItem[]
+  transferItems   InventoryTransferItem[]
+
+  @@unique([storeId, sku])
+  @@unique([storeId, barcode])
+  @@index([storeId, productId])
+  @@index([storeId, isActive, deletedAt])
+  @@map("product_variants")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INVENTORY
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Current on-hand quantity of one variant in one branch.
+model InventoryItem {
+  id        String @id @default(cuid())
+  storeId   String
+  branchId  String
+  variantId String
+
+  quantity     Decimal @db.Decimal(18, 3) /// base units
+  reserved     Decimal @default(0) @db.Decimal(18, 3)
+  minimumStock Decimal @default(0) @db.Decimal(18, 3)
+
+  lastCountedAt DateTime?
+  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now())
+
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch  Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, variantId])
+  @@index([storeId, branchId])
+  @@index([storeId, variantId])
+  @@map("inventory_items")
+}
+
+/// Immutable log of every stock movement. Never updated, never deleted.
+model InventoryTransaction {
+  id        String           @id @default(cuid())
+  storeId   String
+  branchId  String
+  variantId String
+  type      InventoryTxnType
+
+  quantityChange Decimal @db.Decimal(18, 3) /// signed, base units
+  quantityBefore Decimal @db.Decimal(18, 3)
+  quantityAfter  Decimal @db.Decimal(18, 3)
+  unitCostPerBase Decimal @default(0) @db.Decimal(20, 6)
+
+  referenceType String? /// sale | purchase | return | adjustment | transfer
+  referenceId   String?
+  userId        String?
+  reason        String?
+  note          String?
+  occurredAt    DateTime @default(now())
+
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch  Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, occurredAt])
+  @@index([storeId, variantId, occurredAt])
+  @@index([storeId, branchId, occurredAt])
+  @@index([referenceType, referenceId])
+  @@map("inventory_transactions")
+}
+
+model InventoryAdjustment {
+  id       String           @id @default(cuid())
+  storeId  String
+  branchId String
+  number   String
+  status   AdjustmentStatus @default(DRAFT)
+  reason   String
+  note     String?
+  userId   String
+  appliedAt DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  deletedAt DateTime?
+
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  items InventoryAdjustmentItem[]
+
+  @@unique([storeId, number])
+  @@index([storeId, createdAt])
+  @@map("inventory_adjustments")
+}
+
+model InventoryAdjustmentItem {
+  id           String  @id @default(cuid())
+  adjustmentId String
+  variantId    String
+  systemQty    Decimal @db.Decimal(18, 3)
+  countedQty   Decimal @db.Decimal(18, 3)
+  difference   Decimal @db.Decimal(18, 3)
+  costPerBase  Decimal @default(0) @db.Decimal(20, 6)
+  note         String?
+
+  adjustment InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  variant    ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([adjustmentId])
+  @@map("inventory_adjustment_items")
+}
+
+model InventoryTransfer {
+  id           String         @id @default(cuid())
+  storeId      String
+  number       String
+  fromBranchId String
+  toBranchId   String
+  status       TransferStatus @default(DRAFT)
+  note         String?
+  userId       String
+  sentAt       DateTime?
+  receivedAt   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  store      Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  fromBranch Branch @relation("TransferFrom", fields: [fromBranchId], references: [id], onDelete: Restrict)
+  toBranch   Branch @relation("TransferTo", fields: [toBranchId], references: [id], onDelete: Restrict)
+
+  items InventoryTransferItem[]
+
+  @@unique([storeId, number])
+  @@index([storeId, createdAt])
+  @@map("inventory_transfers")
+}
+
+model InventoryTransferItem {
+  id          String  @id @default(cuid())
+  transferId  String
+  variantId   String
+  quantity    Decimal @db.Decimal(18, 3)
+  costPerBase Decimal @default(0) @db.Decimal(20, 6)
+
+  transfer InventoryTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  variant  ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([transferId])
+  @@map("inventory_transfer_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PARTIES — customers & suppliers
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Customer {
+  id      String  @id @default(cuid())
+  storeId String
+  name    String
+  phone   String?
+  email   String?
+  address String?
+  note    String?
+
+  /// Positive balance = the customer owes the store.
+  balance   BigInt @default(0)
+  debtLimit BigInt @default(0) /// 0 = inherit store default
+
+  /// Optional compliance fields — only filled when the store's local rules
+  /// require keeping proof that an age check was performed.
+  ageVerified     Boolean   @default(false)
+  ageVerifiedAt   DateTime?
+  ageVerifiedById String?
+
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store  Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales  Sale[]
+  ledger CustomerLedgerEntry[]
+  payments Payment[]
+  returns  SaleReturn[]
+
+  @@index([storeId, isActive, deletedAt])
+  @@index([storeId, name])
+  @@index([storeId, phone])
+  @@map("customers")
+}
+
+/// Append-only receivables ledger. `Customer.balance` is a cache of its sum.
+model CustomerLedgerEntry {
+  id         String          @id @default(cuid())
+  storeId    String
+  customerId String
+  type       PartyLedgerType
+  /// Signed minor units: + increases what the customer owes, − reduces it.
+  amount       BigInt
+  balanceAfter BigInt
+
+  referenceType String?
+  referenceId   String?
+  description   String?
+  userId        String?
+  occurredAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, customerId, occurredAt])
+  @@index([storeId, occurredAt])
+  @@map("customer_ledger_entries")
+}
+
+model Supplier {
+  id      String  @id @default(cuid())
+  storeId String
+  name    String
+  phone   String?
+  email   String?
+  address String?
+  note    String?
+  company String?
+
+  /// Positive balance = the store owes the supplier.
+  balance BigInt @default(0)
+
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store     Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  purchases Purchase[]
+  ledger    SupplierLedgerEntry[]
+  payments  Payment[]
+
+  @@index([storeId, isActive, deletedAt])
+  @@index([storeId, name])
+  @@map("suppliers")
+}
+
+model SupplierLedgerEntry {
+  id         String          @id @default(cuid())
+  storeId    String
+  supplierId String
+  type       PartyLedgerType
+  amount       BigInt
+  balanceAfter BigInt
+
+  referenceType String?
+  referenceId   String?
+  description   String?
+  userId        String?
+  occurredAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, supplierId, occurredAt])
+  @@index([storeId, occurredAt])
+  @@map("supplier_ledger_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SALES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Sale {
+  id       String @id @default(cuid())
+  storeId  String
+  branchId String
+  number   String
+  customerId String?
+  userId     String /// cashier
+  shiftId    String?
+
+  subtotal      BigInt @default(0) /// before discount & tax
+  discountTotal BigInt @default(0)
+  taxTotal      BigInt @default(0)
+  total         BigInt @default(0)
+  paidTotal     BigInt @default(0)
+  dueTotal      BigInt @default(0)
+  cogsTotal     BigInt @default(0)
+  profitTotal   BigInt @default(0) /// total − discounts − cogs (excl. tax)
+
+  status SaleStatus @default(COMPLETED)
+  note   String?
+  soldAt DateTime   @default(now())
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  canceledAt DateTime?
+  canceledById String?
+  cancelReason String?
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  shift    Shift?    @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  items    SaleItem[]
+  payments Payment[]
+  returns  SaleReturn[]
+
+  @@unique([storeId, number])
+  @@index([storeId, soldAt])
+  @@index([storeId, branchId, soldAt])
+  @@index([storeId, customerId, soldAt])
+  @@index([storeId, userId, soldAt])
+  @@index([storeId, status])
+  @@map("sales")
+}
+
+model SaleItem {
+  id        String @id @default(cuid())
+  storeId   String
+  saleId    String
+  variantId String
+
+  /// Snapshots — the invoice must stay readable even if the catalog changes.
+  productName String
+  variantName String
+  sku         String
+  unitLabel   String
+
+  quantityBase  Decimal @db.Decimal(18, 3) /// base units sold
+  displayFactor Decimal @db.Decimal(18, 3) /// base units per sale unit
+  unitPrice     BigInt /// per sale unit
+  discount      BigInt  @default(0)
+  taxAmount     BigInt  @default(0)
+  lineTotal     BigInt /// after discount, incl. tax if tax-inclusive
+
+  costPerBase Decimal @db.Decimal(20, 6) /// avg cost at time of sale
+  cogs        BigInt  @default(0)
+
+  returnedQuantityBase Decimal @default(0) @db.Decimal(18, 3)
+  sortOrder            Int     @default(0)
+
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sale    Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  returnItems SaleReturnItem[]
+
+  @@index([saleId])
+  @@index([storeId, variantId])
+  @@map("sale_items")
+}
+
+model SaleReturn {
+  id       String @id @default(cuid())
+  storeId  String
+  branchId String
+  number   String
+  saleId     String?
+  customerId String?
+  userId     String
+  shiftId    String?
+
+  subtotal    BigInt @default(0)
+  taxTotal    BigInt @default(0)
+  total       BigInt @default(0)
+  refundTotal BigInt @default(0) /// cash actually returned
+  creditTotal BigInt @default(0) /// applied against customer debt
+  cogsTotal   BigInt @default(0)
+
+  restock  Boolean  @default(true)
+  reason   String
+  note     String?
+  returnedAt DateTime @default(now())
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  sale     Sale?     @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  shift    Shift?    @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  items    SaleReturnItem[]
+  payments Payment[]
+
+  @@unique([storeId, number])
+  @@index([storeId, returnedAt])
+  @@index([storeId, saleId])
+  @@map("sale_returns")
+}
+
+model SaleReturnItem {
+  id         String  @id @default(cuid())
+  returnId   String
+  saleItemId String?
+  variantId  String
+
+  productName   String
+  quantityBase  Decimal @db.Decimal(18, 3)
+  displayFactor Decimal @db.Decimal(18, 3)
+  unitPrice     BigInt
+  lineTotal     BigInt
+  costPerBase   Decimal @db.Decimal(20, 6)
+  cogs          BigInt  @default(0)
+
+  saleReturn SaleReturn     @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItem   SaleItem?      @relation(fields: [saleItemId], references: [id], onDelete: SetNull)
+  variant    ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([returnId])
+  @@map("sale_return_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PURCHASES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Purchase {
+  id         String @id @default(cuid())
+  storeId    String
+  branchId   String
+  supplierId String
+  number     String
+  reference  String? /// supplier's own invoice number
+  userId     String
+
+  subtotal      BigInt @default(0)
+  discountTotal BigInt @default(0)
+  extraCosts    BigInt @default(0) /// shipping, customs … distributed over cost
+  taxTotal      BigInt @default(0)
+  total         BigInt @default(0)
+  paidTotal     BigInt @default(0)
+  dueTotal      BigInt @default(0)
+
+  status     PurchaseStatus @default(DRAFT)
+  note       String?
+  purchasedAt DateTime      @default(now())
+  receivedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  items    PurchaseItem[]
+  payments Payment[]
+
+  @@unique([storeId, number])
+  @@index([storeId, purchasedAt])
+  @@index([storeId, supplierId, purchasedAt])
+  @@index([storeId, status])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id         String @id @default(cuid())
+  purchaseId String
+  variantId  String
+
+  productName String
+  sku         String
+  unitLabel   String
+
+  quantityBase  Decimal @db.Decimal(18, 3)
+  displayFactor Decimal @db.Decimal(18, 3)
+  unitCost      BigInt /// per purchase unit, before extra costs
+  discount      BigInt  @default(0)
+  lineTotal     BigInt
+  /// Landed cost per base unit after distributing extra costs.
+  landedCostPerBase Decimal @default(0) @db.Decimal(20, 6)
+
+  receivedQuantityBase Decimal @default(0) @db.Decimal(18, 3)
+  sortOrder            Int     @default(0)
+
+  purchase Purchase       @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
+  @@index([variantId])
+  @@map("purchase_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MONEY MOVEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PaymentMethod {
+  id        String            @id @default(cuid())
+  storeId   String
+  name      String
+  type      PaymentMethodType @default(CASH)
+  /// Cash-type methods hit the branch cashbox; others do not.
+  affectsCashbox Boolean      @default(true)
+  isDefault Boolean           @default(false)
+  isActive  Boolean           @default(true)
+  sortOrder Int               @default(0)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  payments Payment[]
+  expenses Expense[]
+
+  @@unique([storeId, name])
+  @@index([storeId, isActive])
+  @@map("payment_methods")
+}
+
+model Payment {
+  id       String           @id @default(cuid())
+  storeId  String
+  branchId String
+  direction PaymentDirection
+  source    PaymentSource
+  amount    BigInt
+  methodId  String
+  reference String? /// transfer id, cheque number …
+
+  saleId     String?
+  purchaseId String?
+  returnId   String?
+  customerId String?
+  supplierId String?
+  shiftId    String?
+
+  userId String
+  note   String?
+  paidAt DateTime @default(now())
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  store      Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch     Branch         @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  method     PaymentMethod  @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  sale       Sale?          @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  purchase   Purchase?      @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  saleReturn SaleReturn?    @relation(fields: [returnId], references: [id], onDelete: SetNull)
+  customer   Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier   Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  shift      Shift?         @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, paidAt])
+  @@index([storeId, direction, paidAt])
+  @@index([storeId, customerId, paidAt])
+  @@index([storeId, supplierId, paidAt])
+  @@index([saleId])
+  @@map("payments")
+}
+
+model ExpenseCategory {
+  id        String   @id @default(cuid())
+  storeId   String
+  name      String
+  color     String?
+  icon      String?
+  isSystem  Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@unique([storeId, name])
+  @@index([storeId, isActive])
+  @@map("expense_categories")
+}
+
+model Expense {
+  id         String @id @default(cuid())
+  storeId    String
+  branchId   String
+  categoryId String
+  methodId   String?
+
+  amount      BigInt
+  description String
+  note        String?
+  receiptUrl  String?
+  userId      String
+  shiftId     String?
+  spentAt     DateTime @default(now())
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  store    Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  category ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  method   PaymentMethod?  @relation(fields: [methodId], references: [id], onDelete: SetNull)
+  shift    Shift?          @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, spentAt])
+  @@index([storeId, categoryId, spentAt])
+  @@index([storeId, branchId, spentAt])
+  @@map("expenses")
+}
+
+model Cashbox {
+  id        String   @id @default(cuid())
+  storeId   String
+  branchId  String
+  name      String   @default("الصندوق الرئيسي")
+  balance   BigInt   @default(0)
+  isDefault Boolean  @default(true)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  transactions CashboxTransaction[]
+  shifts       Shift[]
+
+  @@unique([branchId, name])
+  @@index([storeId])
+  @@map("cashboxes")
+}
+
+/// Append-only cash movement log. `Cashbox.balance` is a cache of its sum.
+model CashboxTransaction {
+  id        String         @id @default(cuid())
+  storeId   String
+  cashboxId String
+  type      CashboxTxnType
+  /// Signed minor units: + cash in, − cash out.
+  amount       BigInt
+  balanceAfter BigInt
+
+  referenceType String?
+  referenceId   String?
+  shiftId       String?
+  userId        String
+  description   String?
+  occurredAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  cashbox Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Cascade)
+  shift   Shift?  @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, occurredAt])
+  @@index([cashboxId, occurredAt])
+  @@index([shiftId])
+  @@map("cashbox_transactions")
+}
+
+model Shift {
+  id        String      @id @default(cuid())
+  storeId   String
+  branchId  String
+  cashboxId String
+  userId    String
+  number    String
+  status    ShiftStatus @default(OPEN)
+
+  openingCash BigInt    @default(0)
+  expectedCash BigInt   @default(0)
+  actualCash  BigInt?
+  difference  BigInt    @default(0)
+
+  salesTotal      BigInt @default(0)
+  cashSalesTotal  BigInt @default(0)
+  refundsTotal    BigInt @default(0)
+  expensesTotal   BigInt @default(0)
+  collectionsTotal BigInt @default(0)
+  payoutsTotal    BigInt @default(0)
+  invoiceCount    Int    @default(0)
+
+  openedAt  DateTime  @default(now())
+  closedAt  DateTime?
+  openNote  String?
+  closeNote String?
+  differenceReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  cashbox Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+
+  sales        Sale[]
+  returns      SaleReturn[]
+  payments     Payment[]
+  expenses     Expense[]
+  cashboxTxns  CashboxTransaction[]
+
+  @@unique([storeId, number])
+  @@index([storeId, status])
+  @@index([storeId, userId, openedAt])
+  @@index([storeId, branchId, openedAt])
+  @@map("shifts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PLATFORM SERVICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Notification {
+  id       String               @id @default(cuid())
+  storeId  String?
+  userId   String?
+  kind     NotificationKind
+  severity NotificationSeverity @default(INFO)
+  title    String
+  body     String
+  link     String?
+  entityType String?
+  entityId   String?
+  /// Idempotency for generated notices — e.g. `overdue-debts:2026-09-18` — so a
+  /// daily digest is created once per store per day however many requests race.
+  dedupeKey String?
+  createdAt DateTime            @default(now())
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  /// Read state is per person: the owner reading a store-wide alert must not
+  /// hide it from the manager.
+  reads NotificationRead[]
+
+  @@unique([storeId, dedupeKey])
+  @@index([storeId, createdAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model NotificationRead {
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@index([userId])
+  @@map("notification_reads")
+}
+
+model AuditLog {
+  id      String  @id @default(cuid())
+  storeId String?
+  userId  String?
+
+  action     String /// sale.create | product.price_change | shift.close …
+  entityType String
+  entityId   String?
+  summary    String /// human-readable Arabic sentence
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  isSupport  Boolean @default(false)
+  createdAt  DateTime @default(now())
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, entityType, entityId])
+  @@index([storeId, userId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+/// Atomic sequence generator for human-facing document numbers.
+model Counter {
+  id      String @id @default(cuid())
+  storeId String
+  key     String /// SALE:2026 | PURCHASE:2026 | RETURN:2026 …
+  value   Int    @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, key])
+  @@map("counters")
+}
+
+/// Guards financial writes against duplicate submission / offline replay.
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  storeId   String
+  scope     String /// sale.create | payment.create …
+  key       String
+  requestHash String
+  resultId  String?
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, scope, key])
+  @@index([createdAt])
+  @@map("idempotency_keys")
+}
+
+model Attachment {
+  id       String @id @default(cuid())
+  storeId  String
+  entityType String
+  entityId   String
+  fileName String
+  mimeType String
+  sizeBytes Int
+  url      String
+  uploadedById String?
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, entityType, entityId])
+  @@map("attachments")
+}
