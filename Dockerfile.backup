@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1.7
+FROM rclone/rclone:1.75.1 AS rclone
+
+FROM postgres:18-bookworm
+
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+COPY deploy/backup-to-drive.sh /usr/local/bin/backup-to-drive
+
+RUN chmod 0755 /usr/local/bin/backup-to-drive \
+    && mkdir -p /var/backups/vape-shop \
+    && chown -R postgres:postgres /var/backups/vape-shop
+
+USER postgres
+VOLUME ["/var/backups/vape-shop"]
+
+ENTRYPOINT ["/usr/local/bin/backup-to-drive"]

@@ -1,0 +1,25 @@
+services:
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${RCLONE_CONFIG_GDRIVE_CLIENT_ID}
+      RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${RCLONE_CONFIG_GDRIVE_CLIENT_SECRET}
+      RCLONE_CONFIG_GDRIVE_TOKEN: ${RCLONE_CONFIG_GDRIVE_TOKEN}
+      REMOTE_DIR: ${REMOTE_DIR:-gdrive:vape-shop-backups}
+      RETENTION_DAYS: ${RETENTION_DAYS:-14}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-86400}
+    volumes:
+      - backup-cache:/var/backups/vape-shop
+    networks:
+      - dokploy-network
+
+volumes:
+  backup-cache:
+
+networks:
+  dokploy-network:
+    external: true

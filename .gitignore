@@ -19,3 +19,4 @@ prisma/.prisma-dev/
 .tsbuildinfo
 *.tsbuildinfo
 public/uploads/
+.rclone-*.tmp
