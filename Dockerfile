@@ -9,7 +9,7 @@ COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
 RUN npm ci
 
-FROM node:22-bookworm-slim AS builder
+FROM dependencies AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
@@ -17,7 +17,6 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     AUTH_SECRET=build-only-secret-that-is-never-used-at-runtime
 ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
-COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
