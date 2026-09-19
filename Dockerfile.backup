@@ -6,7 +6,11 @@ FROM postgres:18-bookworm
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY deploy/backup-to-drive.sh /usr/local/bin/backup-to-drive
 
-RUN chmod 0755 /usr/local/bin/backup-to-drive \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates \
+    && chmod 0755 /usr/local/bin/backup-to-drive \
     && mkdir -p /var/backups/vape-shop \
     && chown -R postgres:postgres /var/backups/vape-shop
 

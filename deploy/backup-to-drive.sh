@@ -25,21 +25,21 @@ backup_once() {
 
   echo "[$(date -u +%FT%TZ)] Starting PostgreSQL backup"
   pg_dump --format=custom --compress=9 --no-owner --no-acl \
-    --file "$file" "$DATABASE_URL"
-  pg_restore --list "$file" >/dev/null
-  sha256sum "$file" > "$checksum"
+    --file "$file" "$DATABASE_URL" || return 1
+  pg_restore --list "$file" >/dev/null || return 1
+  sha256sum "$file" > "$checksum" || return 1
 
-  rclone copyto "$file" "$REMOTE_DIR/$(basename "$file")" --checkers 2 --transfers 1
-  rclone copyto "$checksum" "$REMOTE_DIR/$(basename "$checksum")" --checkers 2 --transfers 1
+  rclone copyto "$file" "$REMOTE_DIR/$(basename "$file")" --checkers 2 --transfers 1 || return 1
+  rclone copyto "$checksum" "$REMOTE_DIR/$(basename "$checksum")" --checkers 2 --transfers 1 || return 1
   rclone check "$BACKUP_DIR" "$REMOTE_DIR" \
     --include "$(basename "$file")" \
     --include "$(basename "$checksum")" \
-    --one-way
+    --one-way || return 1
 
   # Retention applies only to backup files created by this OAuth application.
   rclone delete "$REMOTE_DIR" --min-age "${RETENTION_DAYS}d" \
     --include 'database-*.dump' \
-    --include 'database-*.dump.sha256'
+    --include 'database-*.dump.sha256' || return 1
   find "$BACKUP_DIR" -type f -name 'database-*.dump*' -mtime +2 -delete
 
   touch /tmp/last-backup-success
